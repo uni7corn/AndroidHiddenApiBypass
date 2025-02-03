@@ -1,6 +1,8 @@
 # AndroidHiddenApiBypass
 
 [![Android CI status](https://github.com/LSPosed/AndroidHiddenApiBypass/actions/workflows/android.yml/badge.svg?branch=main)](https://github.com/LSPosed/AndroidHiddenApiBypass/actions/workflows/android.yml)
+![](https://img.shields.io/badge/Android-1.0%20--%2016-blue.svg)
+![](https://img.shields.io/maven-central/v/org.lsposed.hiddenapibypass/hiddenapibypass.svg)
 
 Bypass restrictions on non-SDK interfaces.
 
@@ -8,7 +10,7 @@ Bypass restrictions on non-SDK interfaces.
 
 - Pure Java: no native code used.
 - Reliable: does not rely on specific behaviors, so it will not be blocked like meta-reflection or `dexfile`.
-- Stable: `unsafe`, art structs and `setHiddenApiExemptions` are stable APIs.
+- Stable: does not rely on internal ART structures on Android 10+. `unsafe` and `setHiddenApiExemptions` are stable APIs.
 
 [How it works (Chinese)](https://lovesykun.cn/archives/android-hidden-api-bypass.html)
 
@@ -21,7 +23,7 @@ repositories {
     mavenCentral()
 }
 dependencies {
-    implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:4.3'
+    implementation 'org.lsposed.hiddenapibypass:hiddenapibypass:+'
 }
 ```
 
@@ -69,7 +71,7 @@ dependencies {
     ```
 ## License
 
-    Copyright 2021-2023 LSPosed
+    Copyright 2021-2025 LSPosed
 
     Licensed under the Apache License, Version 2.0 (the "License");
     you may not use this file except in compliance with the License.

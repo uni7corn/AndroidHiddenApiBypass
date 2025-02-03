@@ -1,4 +1,4 @@
-import com.android.build.api.dsl.ManagedVirtualDevice
+import com.android.build.api.artifact.SingleArtifact
 
 plugins {
     alias(libs.plugins.agp.lib)
@@ -9,8 +9,8 @@ plugins {
 }
 
 android {
-    compileSdk = 34
-    buildToolsVersion = "34.0.0"
+    compileSdk = 35
+    buildToolsVersion = "35.0.1"
     namespace = "org.lsposed.hiddenapibypass.library"
 
     buildFeatures {
@@ -22,7 +22,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     testOptions {
-        targetSdk = 34
+        targetSdk = 35
     }
     buildTypes {
         release {
@@ -54,6 +54,38 @@ dependencies {
     androidTestImplementation(libs.test.rules)
     androidTestCompileOnly(projects.stub)
 }
+
+@CacheableTask
+abstract class ManifestUpdater : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val mergedManifest: RegularFileProperty
+
+    @get:OutputFile
+    abstract val outputManifest: RegularFileProperty
+
+    @TaskAction
+    fun taskAction() {
+        outputManifest.get().asFile.writeText(
+            mergedManifest.get().asFile.readText()
+                .replace("<uses-sdk ", "<uses-sdk android:targetSdkVersion=\"35\" ")
+        )
+    }
+}
+
+
+androidComponents.onVariants { variant ->
+    val variantName = variant.name
+    val manifestUpdater =
+        project.tasks.register("${variantName}ManifestUpdater", ManifestUpdater::class.java)
+    variant.artifacts.use(manifestUpdater)
+        .wiredWithFiles(
+            ManifestUpdater::mergedManifest,
+            ManifestUpdater::outputManifest
+        )
+        .toTransform(SingleArtifact.MERGED_MANIFEST)
+}
+
 
 val repo = jgit.repo(true)
 version = repo?.latestTag?.removePrefix("v") ?: "0.0"

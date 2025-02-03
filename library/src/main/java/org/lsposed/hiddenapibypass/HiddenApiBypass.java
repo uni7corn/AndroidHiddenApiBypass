@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2021-2023 LSPosed
+ * Copyright (C) 2021-2025 LSPosed
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,6 +33,7 @@ import java.lang.reflect.Executable;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -41,8 +42,42 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import dalvik.system.PathClassLoader;
 import dalvik.system.VMRuntime;
 import sun.misc.Unsafe;
+
+@RequiresApi(Build.VERSION_CODES.P)
+class CoreOjClassLoader extends PathClassLoader {
+    private static String getCoreOjPath() {
+        String bootClassPath = System.getProperty("java.boot.class.path", "");
+        assert bootClassPath != null;
+        return bootClassPath.split(":", 2)[0];
+    }
+
+    public CoreOjClassLoader() {
+        super(getCoreOjPath(), null);
+    }
+
+    @Override
+    public Class<?> loadClass(String name) throws ClassNotFoundException {
+        if (Object.class.getName().equals(name)) {
+            return Object.class;
+        }
+        try {
+            return findClass(name);
+        } catch (Throwable ignored) {
+            // no class file in jar before art moved to apex.
+        }
+        if (Executable.class.getName().equals(name)) {
+            return Helper.Executable.class;
+        } else if (MethodHandle.class.getName().equals(name)) {
+            return Helper.MethodHandle.class;
+        } else if (Class.class.getName().equals(name)) {
+            return Helper.Class.class;
+        }
+        return super.loadClass(name);
+    }
+}
 
 @RequiresApi(Build.VERSION_CODES.P)
 public final class HiddenApiBypass {
@@ -65,12 +100,21 @@ public final class HiddenApiBypass {
             //noinspection JavaReflectionMemberAccess DiscouragedPrivateApi
             unsafe = (Unsafe) Unsafe.class.getDeclaredMethod("getUnsafe").invoke(null);
             assert unsafe != null;
-            methodOffset = unsafe.objectFieldOffset(Helper.Executable.class.getDeclaredField("artMethod"));
-            classOffset = unsafe.objectFieldOffset(Helper.Executable.class.getDeclaredField("declaringClass"));
-            artOffset = unsafe.objectFieldOffset(Helper.MethodHandle.class.getDeclaredField("artFieldOrMethod"));
-            methodsOffset = unsafe.objectFieldOffset(Helper.Class.class.getDeclaredField("methods"));
-            iFieldOffset = unsafe.objectFieldOffset(Helper.Class.class.getDeclaredField("iFields"));
-            sFieldOffset = unsafe.objectFieldOffset(Helper.Class.class.getDeclaredField("sFields"));
+            ClassLoader bootClassloader = new CoreOjClassLoader();
+            Class<?> executableClass = bootClassloader.loadClass(Executable.class.getName());
+            Class<?> methodHandleClass = bootClassloader.loadClass(MethodHandle.class.getName());
+            Class<?> classClass = bootClassloader.loadClass(Class.class.getName());
+            methodOffset = unsafe.objectFieldOffset(executableClass.getDeclaredField("artMethod"));
+            classOffset = unsafe.objectFieldOffset(executableClass.getDeclaredField("declaringClass"));
+            artOffset = unsafe.objectFieldOffset(methodHandleClass.getDeclaredField("artFieldOrMethod"));
+            long fieldOffset;
+            try {
+                fieldOffset = unsafe.objectFieldOffset(classClass.getDeclaredField("fields"));
+            } catch (NoSuchFieldException e) {
+                fieldOffset = unsafe.objectFieldOffset(classClass.getDeclaredField("iFields"));
+            }
+            iFieldOffset = fieldOffset;
+            methodsOffset = unsafe.objectFieldOffset(classClass.getDeclaredField("methods"));
             Method mA = Helper.NeverCall.class.getDeclaredMethod("a");
             Method mB = Helper.NeverCall.class.getDeclaredMethod("b");
             mA.setAccessible(true);
@@ -101,6 +145,11 @@ public final class HiddenApiBypass {
                     Long.toString(jAddr, 16) + ", " +
                     Long.toString(iFields, 16));
             artFieldBias = iAddr - iFields;
+            if (unsafe.getInt(unsafe.getLong(Helper.NeverCall.class, iFieldOffset)) == 4) {
+                sFieldOffset = iFieldOffset;
+            } else {
+                sFieldOffset = unsafe.objectFieldOffset(classClass.getDeclaredField("sFields"));
+            }
         } catch (ReflectiveOperationException e) {
             Log.e(TAG, "Initialize error", e);
             throw new ExceptionInInitializerError(e);
@@ -233,7 +282,7 @@ public final class HiddenApiBypass {
      * @param parameterTypes argument types of the expected method with name {@code methodName}
      * @return the found method
      * @throws NoSuchMethodException when no method matches the given parameters
-     * @see Class#getDeclaredMethod(String, Class[]) 
+     * @see Class#getDeclaredMethod(String, Class[])
      */
     @NonNull
     public static Method getDeclaredMethod(@NonNull Class<?> clazz, @NonNull String methodName, @NonNull Class<?>... parameterTypes) throws NoSuchMethodException {
@@ -299,14 +348,15 @@ public final class HiddenApiBypass {
         long fields = unsafe.getLong(clazz, iFieldOffset);
         if (fields == 0) return list;
         int numFields = unsafe.getInt(fields);
-        if (BuildConfig.DEBUG) Log.d(TAG, clazz + " has " + numFields + " instance fields");
+        if (BuildConfig.DEBUG) Log.d(TAG, clazz + " has " + numFields + " fields");
         for (int i = 0; i < numFields; i++) {
             long field = fields + i * artFieldSize + artFieldBias;
             unsafe.putLong(mh, artOffset, field);
             Field member = MethodHandles.reflectAs(Field.class, mh);
             if (BuildConfig.DEBUG)
                 Log.v(TAG, "got " + member.getType() + " " + clazz.getTypeName() + "." + member.getName());
-            list.add(member);
+            if (!Modifier.isStatic(member.getModifiers()))
+                list.add(member);
         }
         return list;
     }
@@ -332,14 +382,15 @@ public final class HiddenApiBypass {
         long fields = unsafe.getLong(clazz, sFieldOffset);
         if (fields == 0) return list;
         int numFields = unsafe.getInt(fields);
-        if (BuildConfig.DEBUG) Log.d(TAG, clazz + " has " + numFields + " static fields");
+        if (BuildConfig.DEBUG) Log.d(TAG, clazz + " has " + numFields + " fields");
         for (int i = 0; i < numFields; i++) {
             long field = fields + i * artFieldSize + artFieldBias;
             unsafe.putLong(mh, artOffset, field);
             Field member = MethodHandles.reflectAs(Field.class, mh);
             if (BuildConfig.DEBUG)
                 Log.v(TAG, "got " + member.getType() + " " + clazz.getTypeName() + "." + member.getName());
-            list.add(member);
+            if (Modifier.isStatic(member.getModifiers()))
+                list.add(member);
         }
         return list;
     }
