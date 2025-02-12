@@ -1,4 +1,12 @@
-import com.android.build.api.dsl.ManagedVirtualDevice
+import com.android.build.api.artifact.SingleArtifact
+import com.android.build.api.instrumentation.AsmClassVisitorFactory
+import com.android.build.api.instrumentation.ClassContext
+import com.android.build.api.instrumentation.ClassData
+import com.android.build.api.instrumentation.InstrumentationParameters
+import com.android.build.api.instrumentation.InstrumentationScope
+import org.objectweb.asm.ClassVisitor
+import org.objectweb.asm.commons.ClassRemapper
+import org.objectweb.asm.commons.Remapper
 
 plugins {
     alias(libs.plugins.agp.lib)
@@ -9,8 +17,8 @@ plugins {
 }
 
 android {
-    compileSdk = 34
-    buildToolsVersion = "34.0.0"
+    compileSdk = 35
+    buildToolsVersion = "35.0.1"
     namespace = "org.lsposed.hiddenapibypass.library"
 
     buildFeatures {
@@ -22,7 +30,7 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     testOptions {
-        targetSdk = 34
+        targetSdk = 35
     }
     buildTypes {
         release {
@@ -30,8 +38,8 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
     }
     packaging {
         resources {
@@ -54,6 +62,64 @@ dependencies {
     androidTestImplementation(libs.test.rules)
     androidTestCompileOnly(projects.stub)
 }
+
+androidComponents.onVariants { variant ->
+    variant.instrumentation.transformClassesWith(
+        ClassVisitorFactory::class.java, InstrumentationScope.PROJECT
+    ) {}
+}
+
+abstract class ClassVisitorFactory : AsmClassVisitorFactory<InstrumentationParameters.None> {
+    override fun createClassVisitor(
+        classContext: ClassContext,
+        nextClassVisitor: ClassVisitor
+    ): ClassVisitor {
+        return ClassRemapper(nextClassVisitor, object : Remapper() {
+            override fun map(name: String): String {
+                if (name.startsWith("stub/")) {
+                    return name.substring(name.indexOf('/') + 1)
+                }
+                return name
+            }
+        })
+    }
+
+    override fun isInstrumentable(classData: ClassData): Boolean {
+        return classData.className.endsWith("ass")
+    }
+}
+
+@CacheableTask
+abstract class ManifestUpdater : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val mergedManifest: RegularFileProperty
+
+    @get:OutputFile
+    abstract val outputManifest: RegularFileProperty
+
+    @TaskAction
+    fun taskAction() {
+        outputManifest.get().asFile.writeText(
+            mergedManifest.get().asFile.readText()
+                .replace("<uses-sdk ", "<uses-sdk android:targetSdkVersion=\"35\" ")
+        )
+    }
+}
+
+
+androidComponents.onVariants { variant ->
+    val variantName = variant.name
+    val manifestUpdater =
+        project.tasks.register("${variantName}ManifestUpdater", ManifestUpdater::class.java)
+    variant.artifacts.use(manifestUpdater)
+        .wiredWithFiles(
+            ManifestUpdater::mergedManifest,
+            ManifestUpdater::outputManifest
+        )
+        .toTransform(SingleArtifact.MERGED_MANIFEST)
+}
+
 
 val repo = jgit.repo(true)
 version = repo?.latestTag?.removePrefix("v") ?: "0.0"
